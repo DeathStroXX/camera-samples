@@ -38,6 +38,9 @@ import kotlinx.coroutines.launch
 import java.io.BufferedInputStream
 import java.io.File
 import kotlin.math.max
+import android.graphics.ImageDecoder
+import android.os.Build
+
 
 
 class ImageViewerFragment : Fragment() {
@@ -55,6 +58,19 @@ class ImageViewerFragment : Fragment() {
             inSampleSize = max(scaleFactorX, scaleFactorY)
         }
     }
+
+    //Adding code changes for handling raw image
+    private fun isRawFile(file: File): Boolean {
+        return file.extension.equals("dng", ignoreCase = true)
+    }
+    private fun decodeRawImage(file: File): Bitmap? {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            ImageDecoder.decodeBitmap(ImageDecoder.createSource(file))
+        } else {
+            null // Handle DNG decoding differently for older APIs if needed.
+        }
+    }
+
 
     /** Bitmap transformation derived from passed arguments */
     private val bitmapTransformation: Matrix by lazy { decodeExifOrientation(args.orientation) }
@@ -84,28 +100,61 @@ class ImageViewerFragment : Fragment() {
         }
     }
 
+//    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+//        super.onViewCreated(view, savedInstanceState)
+//
+//        view as ViewPager2
+//        lifecycleScope.launch(Dispatchers.IO) {
+//
+//            // Load input image file
+//            val inputBuffer = loadInputBuffer()
+//
+//            // Load the main JPEG image
+//            addItemToViewPager(view, decodeBitmap(inputBuffer, 0, inputBuffer.size))
+//
+//            // If we have depth data attached, attempt to load it
+//            if (isDepth) {
+//                try {
+//                    val depthStart = findNextJpegEndMarker(inputBuffer, 2)
+//                    addItemToViewPager(view, decodeBitmap(
+//                            inputBuffer, depthStart, inputBuffer.size - depthStart))
+//
+//                    val confidenceStart = findNextJpegEndMarker(inputBuffer, depthStart)
+//                    addItemToViewPager(view, decodeBitmap(
+//                            inputBuffer, confidenceStart, inputBuffer.size - confidenceStart))
+//
+//                } catch (exc: RuntimeException) {
+//                    Log.e(TAG, "Invalid start marker for depth or confidence data")
+//                }
+//            }
+//        }
+//    }
+
+    //Adding code for handling both raw and jpeg
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
         view as ViewPager2
         lifecycleScope.launch(Dispatchers.IO) {
-
-            // Load input image file
+            val file = File(args.filePath)
             val inputBuffer = loadInputBuffer()
+            val bitmap = if (isRawFile(file)) {
+                decodeRawImage(file)
+            } else {
+                // Load input image file as JPEG
+                decodeBitmap(inputBuffer, 0, inputBuffer.size)
+            }
 
-            // Load the main JPEG image
-            addItemToViewPager(view, decodeBitmap(inputBuffer, 0, inputBuffer.size))
+            bitmap?.let { addItemToViewPager(view, it) }
 
-            // If we have depth data attached, attempt to load it
-            if (isDepth) {
+            // Apply depth data loading logic only for JPEG images
+            if (!isRawFile(file) && isDepth) {
                 try {
                     val depthStart = findNextJpegEndMarker(inputBuffer, 2)
-                    addItemToViewPager(view, decodeBitmap(
-                            inputBuffer, depthStart, inputBuffer.size - depthStart))
+                    addItemToViewPager(view, decodeBitmap(inputBuffer, depthStart, inputBuffer.size - depthStart))
 
                     val confidenceStart = findNextJpegEndMarker(inputBuffer, depthStart)
-                    addItemToViewPager(view, decodeBitmap(
-                            inputBuffer, confidenceStart, inputBuffer.size - confidenceStart))
+                    addItemToViewPager(view, decodeBitmap(inputBuffer, confidenceStart, inputBuffer.size - confidenceStart))
 
                 } catch (exc: RuntimeException) {
                     Log.e(TAG, "Invalid start marker for depth or confidence data")
@@ -113,6 +162,7 @@ class ImageViewerFragment : Fragment() {
             }
         }
     }
+
 
     /** Utility function used to read input file into a byte array */
     private fun loadInputBuffer(): ByteArray {

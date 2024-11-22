@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-package com.example.android.camera.utils
+package com.example.android.camera2.basic.fragments
 
 import android.content.Context
 import android.graphics.Bitmap
