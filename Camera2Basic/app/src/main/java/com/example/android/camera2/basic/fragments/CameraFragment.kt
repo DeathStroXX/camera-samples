@@ -20,6 +20,8 @@ package com.example.android.camera2.basic.fragments
 import android.annotation.SuppressLint
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.ImageFormat
 import android.hardware.camera2.CameraCaptureSession
@@ -62,6 +64,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.io.Closeable
 import java.io.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.text.SimpleDateFormat
@@ -213,11 +216,7 @@ class CameraFragment : Fragment() {
             size.width, size.height, args.pixelFormat, IMAGE_BUFFER_SIZE)
 
         // RAW ImageReader
-//        val rawSize = characteristics.get(
-//            CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
-//            .getOutputSizes(ImageFormat.RAW_SENSOR).maxByOrNull { it.height * it.width }!!
-//        imageReaderRAW = ImageReader.newInstance(
-//            rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, IMAGE_BUFFER_SIZE)
+
         val rawSizes = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?.getOutputSizes(ImageFormat.RAW_SENSOR)
 
@@ -251,6 +250,7 @@ class CameraFragment : Fragment() {
 
             // Disable click listener to prevent multiple requests simultaneously in flight
             it.isEnabled = false
+
 
             // Perform I/O heavy operations in a different scope
             lifecycleScope.launch(Dispatchers.IO) {
@@ -451,8 +451,7 @@ class CameraFragment : Fragment() {
                 try {
                     val jpgFile = createFile(requireContext(), "jpg")
                     FileOutputStream(jpgFile).use { it.write(bytes) }
-                    // Save DNG version even if it's JPEG format
-                    saveAsDNG(result)
+
                     cont.resume(jpgFile)
                 } catch (exc: IOException) {
                     Log.e(TAG, "Unable to write JPEG image to file", exc)
@@ -462,12 +461,17 @@ class CameraFragment : Fragment() {
 
             ImageFormat.RAW_SENSOR -> {
                 // Handle RAW_SENSOR image format
-//                saveAsDNG(result)  // Save RAW as DNG
+//
                 val dngFile = createFile(requireContext(), "dng")
                 try {
                     val dngCreator = DngCreator(characteristics, result.metadata)
                     FileOutputStream(dngFile).use { dngCreator.writeImage(it, result.image) }
                     cont.resume(dngFile)
+
+                    // Convert RAW to JPEG and save
+                    val jpegFile = convertRawToJpeg(dngFile)
+                    Log.d(TAG, "JPEG image saved: ${jpegFile.absolutePath}")
+
                 } catch (exc: IOException) {
                     Log.e(TAG, "Unable to write DNG image to file", exc)
                     cont.resumeWithException(exc)
@@ -482,16 +486,25 @@ class CameraFragment : Fragment() {
         }
     }
 
-    private fun saveAsDNG(result: CombinedCaptureResult) {
-        // Convert JPEG to DNG format (even if it is JPEG)
-        try {
-            val dngCreator = DngCreator(characteristics, result.metadata)
-            val dngFile = createFile(requireContext(), "dng")  // Save as DNG
-            FileOutputStream(dngFile).use { dngCreator.writeImage(it, result.image) }
-        } catch (exc: IOException) {
-            Log.e(TAG, "Error saving DNG", exc)
+
+    private fun convertRawToJpeg(rawFile: File): File {
+        // Decode the RAW file
+        val inputStream = FileInputStream(rawFile)
+        val options = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.ARGB_8888
         }
+        val bitmap = BitmapFactory.decodeStream(inputStream, null, options)
+        inputStream.close()
+
+        // Create a new JPEG file
+        val jpegFile = createFile(requireContext(), "jpg")
+        FileOutputStream(jpegFile).use { outputStream ->
+            bitmap?.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
+        }
+
+        return jpegFile
     }
+
 
 
 
