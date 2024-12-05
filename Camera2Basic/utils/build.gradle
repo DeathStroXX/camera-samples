@@ -58,6 +58,7 @@ dependencies {
 
     // EXIF Interface
     implementation 'androidx.exifinterface:exifinterface:1.2.0'
+    implementation 'com.google.ai.edge.litert:litert:1.0.1'
 
     // Unit testing
     testImplementation 'androidx.test.ext:junit:1.1.1'

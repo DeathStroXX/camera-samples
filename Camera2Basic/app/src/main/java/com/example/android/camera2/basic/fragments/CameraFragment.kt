@@ -62,10 +62,12 @@ import com.example.android.camera2.basic.databinding.FragmentCameraBinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.json.JSONObject
 import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.FileWriter
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.concurrent.ArrayBlockingQueue
@@ -108,6 +110,12 @@ class CameraFragment : Fragment() {
 
     //For reading raw image
     private lateinit var imageReaderRAW: ImageReader
+
+    // For DEPTH\
+    private lateinit var imageReaderDepth: ImageReader
+
+
+
 
     /** [HandlerThread] where all camera operations run */
     private val cameraThread = HandlerThread("CameraThread").apply { start() }
@@ -215,6 +223,7 @@ class CameraFragment : Fragment() {
         imageReader = ImageReader.newInstance(
             size.width, size.height, args.pixelFormat, IMAGE_BUFFER_SIZE)
 
+
         // RAW ImageReader
 
         val rawSizes = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
@@ -228,6 +237,14 @@ class CameraFragment : Fragment() {
         } else {
             Log.e(TAG, "RAW format not supported")
         }
+
+        // Image reader for Depth
+//        val depthSizes= characteristics.get(
+//            CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
+//            .getOutputSizes(ImageFormat.DEPTH_JPEG).maxByOrNull { it.height * it.width }!!
+//        imageReaderDepth = ImageReader.newInstance(
+//            depthSizes.width, depthSizes.height, ImageFormat.DEPTH_JPEG, IMAGE_BUFFER_SIZE)
+
 
         // Creates list of Surfaces where the camera will output frames
 //        val targets = listOf(fragmentCameraBinding.viewFinder.holder.surface, imageReader.surface)
@@ -361,6 +378,8 @@ class CameraFragment : Fragment() {
 
         val rawImageQueue = ArrayBlockingQueue<Image>(IMAGE_BUFFER_SIZE)  // Adding for raw
 
+        val depthImageQueue = ArrayBlockingQueue<Image>(IMAGE_BUFFER_SIZE)  // Ading for depth
+
         imageReader.setOnImageAvailableListener({ reader ->
             val image = reader.acquireNextImage()
             Log.d(TAG, "Image available in queue: ${image.timestamp}")
@@ -372,6 +391,13 @@ class CameraFragment : Fragment() {
             val image = reader.acquireNextImage()
             rawImageQueue.add(image)
         }, imageReaderHandler)
+
+        // Set up the DEPTH_JPEG listener
+//        imageReaderDepth.setOnImageAvailableListener({ reader ->
+//            val image = reader.acquireNextImage()
+//            Log.d(TAG, "DEPTH_JPEG Image available in queue: ${image.timestamp}")
+//            depthImageQueue.add(image)
+//        }, imageReaderHandler)
 
         val captureRequest = session.device.createCaptureRequest(
             CameraDevice.TEMPLATE_STILL_CAPTURE).apply { addTarget(imageReader.surface) }
@@ -468,12 +494,44 @@ class CameraFragment : Fragment() {
                     FileOutputStream(dngFile).use { dngCreator.writeImage(it, result.image) }
                     cont.resume(dngFile)
 
-                    // Convert RAW to JPEG and save
+                    // Save metadata as JSON
+                    val metadataFile = saveMetadata(result.metadata, dngFile)
+                    Log.d(TAG, "Metadata saved: ${metadataFile.absolutePath}")
+
+                    // Convert RAW to JPEG and save performing minor image processing
                     val jpegFile = convertRawToJpeg(dngFile)
                     Log.d(TAG, "JPEG image saved: ${jpegFile.absolutePath}")
 
+
+
                 } catch (exc: IOException) {
                     Log.e(TAG, "Unable to write DNG image to file", exc)
+                    cont.resumeWithException(exc)
+                }
+            }
+
+            ImageFormat.DEPTH_JPEG -> {
+                try {
+                    // Save the JPEG visual image
+                    val buffer = result.image.planes[0].buffer
+                    val bytes = ByteArray(buffer.remaining()).apply { buffer.get(this) }
+                    val jpgFile = createFile(requireContext(), "jpg")
+                    FileOutputStream(jpgFile).use { it.write(bytes) }
+                    Log.d(TAG, "JPEG saved: ${jpgFile.absolutePath}")
+
+                    // Save the depth map (second plane)
+                    val depthBuffer = result.image.planes[1].buffer
+                    val depthBytes =
+                        ByteArray(depthBuffer.remaining()).apply { depthBuffer.get(this) }
+                    val depthFile = createFile(requireContext(), "depth")
+                    FileOutputStream(depthFile).use { it.write(depthBytes) }
+                    Log.d(TAG, "Depth map saved: ${depthFile.absolutePath}")
+
+                    // Resume coroutine with the JPEG file (primary file)
+                    cont.resume(jpgFile)
+
+                } catch (exc: IOException) {
+                    Log.e(TAG, "Unable to write Depth JPEG files", exc)
                     cont.resumeWithException(exc)
                 }
             }
@@ -486,7 +544,7 @@ class CameraFragment : Fragment() {
         }
     }
 
-
+    //created this helper function to convert raw image to jpeg
     private fun convertRawToJpeg(rawFile: File): File {
         // Decode the RAW file
         val inputStream = FileInputStream(rawFile)
@@ -504,6 +562,21 @@ class CameraFragment : Fragment() {
 
         return jpegFile
     }
+    //Helper function created to capture all the metadata information
+    private fun saveMetadata(metadata: CaptureResult, dngFile: File): File {
+        val metadataMap = mutableMapOf<String, Any?>()
+
+        for (key in metadata.keys) {
+            metadataMap[key.name] = metadata.get(key)
+        }
+
+        val metadataFile = File(dngFile.parent, "${dngFile.nameWithoutExtension}_metadata.json")
+        FileWriter(metadataFile).use {
+            it.write(JSONObject(metadataMap).toString(4))
+        }
+        return metadataFile
+    }
+
 
 
 
