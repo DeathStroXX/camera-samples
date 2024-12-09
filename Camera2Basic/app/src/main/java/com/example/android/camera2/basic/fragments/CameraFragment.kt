@@ -53,6 +53,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.navigation.NavController
 import androidx.navigation.Navigation
 import androidx.navigation.fragment.navArgs
+import com.example.android.camera.utils.ModelUtils
 import com.example.android.camera.utils.computeExifOrientation
 import com.example.android.camera.utils.getPreviewOutputSize
 import com.example.android.camera.utils.OrientationLiveData
@@ -63,6 +64,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.json.JSONObject
+import org.tensorflow.lite.Interpreter
 import java.io.Closeable
 import java.io.File
 import java.io.FileInputStream
@@ -113,8 +115,8 @@ class CameraFragment : Fragment() {
 
     // For DEPTH\
     private lateinit var imageReaderDepth: ImageReader
-
-
+    //For model inferences
+    private lateinit var interpreter: Interpreter
 
 
     /** [HandlerThread] where all camera operations run */
@@ -163,6 +165,15 @@ class CameraFragment : Fragment() {
     @SuppressLint("MissingPermission")
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
+
+        try {
+            interpreter = ModelUtils.createInterpreter(requireContext(), "model.tflite")
+            Log.d("Model", "Interpreter initialized successfully.")
+        } catch (e: Exception) {
+            Log.e("Model", "Failed to initialize interpreter: ${e.message}")
+        }
+
+
         fragmentCameraBinding.captureButton.setOnApplyWindowInsetsListener { v, insets ->
             v.translationX = (-insets.systemWindowInsetRight).toFloat()
             v.translationY = (-insets.systemWindowInsetBottom).toFloat()
@@ -213,6 +224,11 @@ class CameraFragment : Fragment() {
      * - Sets up the still image capture listeners
      */
     private fun initializeCamera() = lifecycleScope.launch(Dispatchers.Main) {
+
+        //Loading the model
+       interpreter = ModelUtils.createInterpreter(requireContext(), "model.tflite")
+        Log.d(TAG, "Model loaded successfully.")
+
         // Open the selected camera
         camera = openCamera(cameraManager, args.cameraId, cameraHandler)
 
@@ -225,29 +241,19 @@ class CameraFragment : Fragment() {
 
 
         // RAW ImageReader
-
+            //rawSize = 4000x3000
         val rawSizes = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?.getOutputSizes(ImageFormat.RAW_SENSOR)
 
         if (rawSizes != null && rawSizes.isNotEmpty()) {
             val rawSize = rawSizes.maxByOrNull { it.height * it.width }!!
             imageReaderRAW = ImageReader.newInstance(
-                rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, IMAGE_BUFFER_SIZE
+                rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 5
             )
         } else {
             Log.e(TAG, "RAW format not supported")
         }
 
-        // Image reader for Depth
-//        val depthSizes= characteristics.get(
-//            CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)!!
-//            .getOutputSizes(ImageFormat.DEPTH_JPEG).maxByOrNull { it.height * it.width }!!
-//        imageReaderDepth = ImageReader.newInstance(
-//            depthSizes.width, depthSizes.height, ImageFormat.DEPTH_JPEG, IMAGE_BUFFER_SIZE)
-
-
-        // Creates list of Surfaces where the camera will output frames
-//        val targets = listOf(fragmentCameraBinding.viewFinder.holder.surface, imageReader.surface)
 
         //Adding both raw and jpeg to the targets
         val targets = listOf(fragmentCameraBinding.viewFinder.holder.surface, imageReader.surface, imageReaderRAW.surface)
@@ -261,7 +267,7 @@ class CameraFragment : Fragment() {
         // This will keep sending the capture request as frequently as possible until the
         // session is torn down or session.stopRepeating() is called
         session.setRepeatingRequest(captureRequest.build(), null, cameraHandler)
-
+        Log.d("CaptureRequest", "Capture request sent.")
         // Listen to the capture button
         fragmentCameraBinding.captureButton.setOnClickListener {
 
@@ -274,9 +280,29 @@ class CameraFragment : Fragment() {
                 takePhoto().use { result ->
                     Log.d(TAG, "Result received: $result")
 
-                    // Save the result to disk
+
+// Save the result to disk
                     val output = saveResult(result)
                     Log.d(TAG, "Image saved: ${output.absolutePath}")
+
+                    // Run inferences on raw
+//                        val rawImage = reader.acquireNextImage()
+//                        if (rawImage != null) {
+//                            try {
+//                                // Save RAW image as DNG
+//
+//                                // Run inference on the RAW image
+//                                runInferenceOnRaw(rawImage, interpreter)
+//                            } catch (e: Exception) {
+//                                Log.e(TAG, "Error processing RAW image: ${e.message}")
+//                            } finally {
+//                                rawImage.close()
+//                            }
+//                        } else {
+//                            Log.e(TAG, "RAW image is null.")
+//                        }
+//                    }
+
 
                     // If the result is a JPEG file, update EXIF metadata with orientation info
                     if (output.extension == "jpg") {
@@ -286,6 +312,9 @@ class CameraFragment : Fragment() {
                         exif.saveAttributes()
                         Log.d(TAG, "EXIF metadata saved: ${output.absolutePath}")
                     }
+
+
+
 
                     // Display the photo taken to user
                     lifecycleScope.launch(Dispatchers.Main) {
@@ -378,7 +407,7 @@ class CameraFragment : Fragment() {
 
         val rawImageQueue = ArrayBlockingQueue<Image>(IMAGE_BUFFER_SIZE)  // Adding for raw
 
-        val depthImageQueue = ArrayBlockingQueue<Image>(IMAGE_BUFFER_SIZE)  // Ading for depth
+//        val depthImageQueue = ArrayBlockingQueue<Image>(IMAGE_BUFFER_SIZE)  // Ading for depth
 
         imageReader.setOnImageAvailableListener({ reader ->
             val image = reader.acquireNextImage()
@@ -387,10 +416,39 @@ class CameraFragment : Fragment() {
         }, imageReaderHandler)
 
 //        Adding for Raw
+//        imageReaderRAW.setOnImageAvailableListener({ reader ->
+//            val image = reader.acquireNextImage()
+//            rawImageQueue.add(image)
+//        }, imageReaderHandler)
+
+//        imageReaderRAW.setOnImageAvailableListener({ reader ->
+//            val image = reader.acquireNextImage()
+//            if (image != null) {
+//                Log.d(TAG, "RAW Image acquired: ${image.timestamp}")
+//                rawImageQueue.add(image)
+//            } else {
+//                Log.e(TAG, "RAW Image is null.")
+//            }
+//        }, imageReaderHandler)
         imageReaderRAW.setOnImageAvailableListener({ reader ->
-            val image = reader.acquireNextImage()
-            rawImageQueue.add(image)
+            Log.d("RAWListener", "RAW image listener triggered.")
+            val rawImage = reader.acquireNextImage()
+            if (rawImage != null) {
+                try {
+                    Log.d("RAWInference", "Processing RAW image for inference.")
+                    runInferenceOnRaw(rawImage, interpreter)
+                } catch (e: Exception) {
+                    Log.e("RAWInference", "Error processing RAW image: ${e.message}")
+                } finally {
+                    rawImage.close()
+                }
+            } else {
+                Log.e("RAWInference", "No RAW image available.")
+            }
         }, imageReaderHandler)
+
+
+
 
         // Set up the DEPTH_JPEG listener
 //        imageReaderDepth.setOnImageAvailableListener({ reader ->
@@ -576,6 +634,50 @@ class CameraFragment : Fragment() {
         }
         return metadataFile
     }
+    // Function to run inferences and to extract the raw pixel directly from the planes
+    fun runInferenceOnRaw(image: Image, interpreter: Interpreter) {
+        try {
+            // Extract the buffer from the first plane of the RAW image
+            Log.d("RAWListener", "RAW image listener triggered.")
+            val planes = image.planes
+            val buffer = planes[0].buffer
+            val rawBytes = ByteArray(buffer.remaining())
+            buffer.get(rawBytes)
+            Log.d("RAWInference", "RAW bytes size: ${rawBytes.size}")
+            // Define input size based on your model's requirements
+            val inputSize = 224 // Example size; change this to match your model's input shape
+            val inputArray = FloatArray(inputSize * inputSize)
+
+            // Map RAW bytes to normalized float values (assuming single-channel grayscale)
+            for (i in rawBytes.indices) {
+                inputArray[i] = (rawBytes[i].toInt() and 0xFF) / 255.0f
+                Log.d("RAWInference", "Input array prepared: Size = ${inputArray.size}")
+            }
+
+            // Prepare the output array based on your model's output shape
+            val outputArray = Array(1) { FloatArray(10) } // Adjust size to match model's output
+            Log.d("RAWInference", "Output array initialized.")
+            // Run inference
+            interpreter.run(inputArray, outputArray)
+            Log.d("RAWInference", "Inference completed.")
+            // Process the output to determine the predicted class
+            val predictedClass = outputArray[0].withIndex().maxByOrNull { it.value }?.index
+            if (predictedClass != null) {
+                Log.d("ModelPrediction", "Predicted class from RAW image: $predictedClass")
+            } else {
+                Log.e("ModelPrediction", "Failed to determine predicted class.")
+            }
+        } catch (e: Exception) {
+            // Handle any errors during inference
+            Log.e("ModelError", "Error during RAW image inference: ${e.message}")
+        } finally {
+            // Ensure the RAW image is closed to free resources
+            image.close()
+        }
+    }
+
+
+    // Function to run inferences for Jpeg
 
 
 
@@ -595,6 +697,9 @@ class CameraFragment : Fragment() {
         super.onDestroy()
         cameraThread.quitSafely()
         imageReaderThread.quitSafely()
+
+        interpreter.close()
+        Log.d("Model", "Interpreter closed.")
     }
 
     override fun onDestroyView() {
