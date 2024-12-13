@@ -24,6 +24,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.ImageFormat
+//import android.hardware.HardwareBuffer
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -45,6 +46,7 @@ import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.View
 import android.view.ViewGroup
+//import androidx.annotation.RequiresApi
 import androidx.core.graphics.drawable.toDrawable
 import androidx.exifinterface.media.ExifInterface
 import androidx.fragment.app.Fragment
@@ -227,7 +229,7 @@ class CameraFragment : Fragment() {
 
         //Loading the model
        interpreter = ModelUtils.createInterpreter(requireContext(), "model.tflite")
-        Log.d(TAG, "Model loaded successfully.")
+        Log.d("Model", "Model loaded successfully.")
 
         // Open the selected camera
         camera = openCamera(cameraManager, args.cameraId, cameraHandler)
@@ -248,10 +250,9 @@ class CameraFragment : Fragment() {
         if (rawSizes != null && rawSizes.isNotEmpty()) {
             val rawSize = rawSizes.maxByOrNull { it.height * it.width }!!
             imageReaderRAW = ImageReader.newInstance(
-                rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 5
-            )
-        } else {
-            Log.e(TAG, "RAW format not supported")
+                rawSize.width, rawSize.height, ImageFormat.RAW_SENSOR, 5)   // rawSize 2304x1728
+            Log.d("RawImageReader", "Height: ${rawSize.height} and with${rawSize.width}")
+
         }
 
 
@@ -284,24 +285,6 @@ class CameraFragment : Fragment() {
 // Save the result to disk
                     val output = saveResult(result)
                     Log.d(TAG, "Image saved: ${output.absolutePath}")
-
-                    // Run inferences on raw
-//                        val rawImage = reader.acquireNextImage()
-//                        if (rawImage != null) {
-//                            try {
-//                                // Save RAW image as DNG
-//
-//                                // Run inference on the RAW image
-//                                runInferenceOnRaw(rawImage, interpreter)
-//                            } catch (e: Exception) {
-//                                Log.e(TAG, "Error processing RAW image: ${e.message}")
-//                            } finally {
-//                                rawImage.close()
-//                            }
-//                        } else {
-//                            Log.e(TAG, "RAW image is null.")
-//                        }
-//                    }
 
 
                     // If the result is a JPEG file, update EXIF metadata with orientation info
@@ -421,41 +404,16 @@ class CameraFragment : Fragment() {
 //            rawImageQueue.add(image)
 //        }, imageReaderHandler)
 
-//        imageReaderRAW.setOnImageAvailableListener({ reader ->
-//            val image = reader.acquireNextImage()
-//            if (image != null) {
-//                Log.d(TAG, "RAW Image acquired: ${image.timestamp}")
-//                rawImageQueue.add(image)
-//            } else {
-//                Log.e(TAG, "RAW Image is null.")
-//            }
-//        }, imageReaderHandler)
         imageReaderRAW.setOnImageAvailableListener({ reader ->
-            Log.d("RAWListener", "RAW image listener triggered.")
-            val rawImage = reader.acquireNextImage()
-            if (rawImage != null) {
-                try {
-                    Log.d("RAWInference", "Processing RAW image for inference.")
-                    runInferenceOnRaw(rawImage, interpreter)
-                } catch (e: Exception) {
-                    Log.e("RAWInference", "Error processing RAW image: ${e.message}")
-                } finally {
-                    rawImage.close()
-                }
+            val image = reader.acquireNextImage()
+            if (image != null) {
+                Log.d(TAG, "RAW Image acquired: ${image.timestamp}")
+                Log.d(TAG, "RAW Image acquired: Timestamp = ${image.timestamp}, Width = ${image.width}, Height = ${image.height}")
+                rawImageQueue.add(image)
             } else {
-                Log.e("RAWInference", "No RAW image available.")
+                Log.e(TAG, "RAW Image is null.")
             }
         }, imageReaderHandler)
-
-
-
-
-        // Set up the DEPTH_JPEG listener
-//        imageReaderDepth.setOnImageAvailableListener({ reader ->
-//            val image = reader.acquireNextImage()
-//            Log.d(TAG, "DEPTH_JPEG Image available in queue: ${image.timestamp}")
-//            depthImageQueue.add(image)
-//        }, imageReaderHandler)
 
         val captureRequest = session.device.createCaptureRequest(
             CameraDevice.TEMPLATE_STILL_CAPTURE).apply { addTarget(imageReader.surface) }
@@ -549,6 +507,7 @@ class CameraFragment : Fragment() {
                 val dngFile = createFile(requireContext(), "dng")
                 try {
                     val dngCreator = DngCreator(characteristics, result.metadata)
+
                     FileOutputStream(dngFile).use { dngCreator.writeImage(it, result.image) }
                     cont.resume(dngFile)
 
@@ -557,11 +516,15 @@ class CameraFragment : Fragment() {
                     Log.d(TAG, "Metadata saved: ${metadataFile.absolutePath}")
 
                     // Convert RAW to JPEG and save performing minor image processing
-                    val jpegFile = convertRawToJpeg(dngFile)
+                    val (jpegFile, bitmap) = convertRawToJpeg(dngFile)
                     Log.d(TAG, "JPEG image saved: ${jpegFile.absolutePath}")
 
-
-
+                    // Ensure the Bitmap is not null before running inference
+                    if (bitmap != null) {
+                        runInferenceOnBitmap(bitmap, interpreter)
+                    } else {
+                        Log.e("ImageProcessing", "Failed to decode RAW image to Bitmap.")
+                    }
                 } catch (exc: IOException) {
                     Log.e(TAG, "Unable to write DNG image to file", exc)
                     cont.resumeWithException(exc)
@@ -603,7 +566,7 @@ class CameraFragment : Fragment() {
     }
 
     //created this helper function to convert raw image to jpeg
-    private fun convertRawToJpeg(rawFile: File): File {
+    private fun convertRawToJpeg(rawFile: File): Pair<File, Bitmap?> {
         // Decode the RAW file
         val inputStream = FileInputStream(rawFile)
         val options = BitmapFactory.Options().apply {
@@ -618,8 +581,10 @@ class CameraFragment : Fragment() {
             bitmap?.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
         }
 
-        return jpegFile
+        return Pair(jpegFile, bitmap)
     }
+
+
     //Helper function created to capture all the metadata information
     private fun saveMetadata(metadata: CaptureResult, dngFile: File): File {
         val metadataMap = mutableMapOf<String, Any?>()
@@ -635,49 +600,68 @@ class CameraFragment : Fragment() {
         return metadataFile
     }
     // Function to run inferences and to extract the raw pixel directly from the planes
-    fun runInferenceOnRaw(image: Image, interpreter: Interpreter) {
+    fun runInferenceOnBitmap(bitmap: Bitmap, interpreter: Interpreter) {
         try {
-            // Extract the buffer from the first plane of the RAW image
-            Log.d("RAWListener", "RAW image listener triggered.")
-            val planes = image.planes
-            val buffer = planes[0].buffer
-            val rawBytes = ByteArray(buffer.remaining())
-            buffer.get(rawBytes)
-            Log.d("RAWInference", "RAW bytes size: ${rawBytes.size}")
-            // Define input size based on your model's requirements
-            val inputSize = 224 // Example size; change this to match your model's input shape
-            val inputArray = FloatArray(inputSize * inputSize)
+            // Convert the Bitmap to a FloatArray for inference
+            val inputArray = preprocessBitmapToModelInput(bitmap)
+            Log.d("ModelInput", "Input array size: ${inputArray.size}")
+            // Dynamically allocate output based on the model's output shape
+            val outputShape = interpreter.getOutputTensor(0).shape()
+            val outputArray = FloatArray(outputShape[1]) // Assuming output is 1D
 
-            // Map RAW bytes to normalized float values (assuming single-channel grayscale)
-            for (i in rawBytes.indices) {
-                inputArray[i] = (rawBytes[i].toInt() and 0xFF) / 255.0f
-                Log.d("RAWInference", "Input array prepared: Size = ${inputArray.size}")
-            }
-
-            // Prepare the output array based on your model's output shape
-            val outputArray = Array(1) { FloatArray(10) } // Adjust size to match model's output
-            Log.d("RAWInference", "Output array initialized.")
             // Run inference
-            interpreter.run(inputArray, outputArray)
-            Log.d("RAWInference", "Inference completed.")
-            // Process the output to determine the predicted class
-            val predictedClass = outputArray[0].withIndex().maxByOrNull { it.value }?.index
-            if (predictedClass != null) {
-                Log.d("ModelPrediction", "Predicted class from RAW image: $predictedClass")
-            } else {
-                Log.e("ModelPrediction", "Failed to determine predicted class.")
-            }
+            interpreter.run(arrayOf(inputArray), outputArray)
+            Log.d("Inference", "Inference completed successfully.")
+
+            // Process the output
+            val predictedClass = outputArray.withIndex().maxByOrNull { it.value }?.index
+            Log.d("ModelPrediction", "Predicted class: $predictedClass")
         } catch (e: Exception) {
-            // Handle any errors during inference
-            Log.e("ModelError", "Error during RAW image inference: ${e.message}")
-        } finally {
-            // Ensure the RAW image is closed to free resources
-            image.close()
+            Log.e("ModelError", "Error during inference: ${e.message}")
         }
     }
 
+    private fun preprocessBitmapToModelInput(bitmap: Bitmap): FloatArray {
+        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 2304, 1728, true)
+        val floatArray = FloatArray(2304 * 1728 * 3) // For RGB input
+        var index = 0
 
-    // Function to run inferences for Jpeg
+        for (y in 0 until resizedBitmap.height) {
+            for (x in 0 until resizedBitmap.width) {
+                val pixel = resizedBitmap.getPixel(x, y)
+                floatArray[index++] = (pixel shr 16 and 0xFF) / 255.0f // Red
+                floatArray[index++] = (pixel shr 8 and 0xFF) / 255.0f  // Green
+                floatArray[index++] = (pixel and 0xFF) / 255.0f        // Blue
+            }
+        }
+
+        return floatArray
+    }
+
+
+    private fun prepareInputArray(bitmap: Bitmap, targetWidth: Int, targetHeight: Int): FloatArray {
+        // Resize the bitmap to match the model input dimensions
+        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+
+        // Extract pixel data
+        val pixels = IntArray(targetWidth * targetHeight)
+        resizedBitmap.getPixels(pixels, 0, targetWidth, 0, 0, targetWidth, targetHeight)
+
+        // Convert pixels to normalized FloatArray
+        val inputArray = FloatArray(1 * 3 * targetHeight * targetWidth)
+        var index = 0
+        for (pixel in pixels) {
+            val r = (pixel shr 16 and 0xFF) / 255.0f // Red channel
+            val g = (pixel shr 8 and 0xFF) / 255.0f  // Green channel
+            val b = (pixel and 0xFF) / 255.0f        // Blue channel
+            inputArray[index++] = r
+            inputArray[index++] = g
+            inputArray[index++] = b
+        }
+        return inputArray
+    }
+
+
 
 
 
