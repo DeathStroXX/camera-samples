@@ -604,22 +604,44 @@ class CameraFragment : Fragment() {
         try {
             // Convert the Bitmap to a FloatArray for inference
             val inputArray = preprocessBitmapToModelInput(bitmap)
-            Log.d("ModelInput", "Input array size: ${inputArray.size}")
-            // Dynamically allocate output based on the model's output shape
-            val outputShape = interpreter.getOutputTensor(0).shape()
-            val outputArray = FloatArray(outputShape[1]) // Assuming output is 1D
+            Log.d("ModelInput", "Input array size: ${inputArray.count()}")
 
+            // Get the output tensor and its shape
+            val outputTensor = interpreter.getOutputTensor(0)
+            val outputShape = outputTensor.shape()
+
+            // Calculate the total number of elements in the output tensor
+            val outputSize = outputShape.reduce { acc, dim -> acc * dim }
+
+            // Create an appropriately sized output array
+            val outputArray = Array(outputShape[0]) { FloatArray(outputSize) }
+            Log.d("OutputArraySize", "Dimensions: ${outputArray.size} x ${outputArray[0].size}")
             // Run inference
             interpreter.run(arrayOf(inputArray), outputArray)
             Log.d("Inference", "Inference completed successfully.")
 
-            // Process the output
-            val predictedClass = outputArray.withIndex().maxByOrNull { it.value }?.index
+            // Process the output(example: find the predicted class)
+            val predictedClass = outputArray[0].withIndex().maxByOrNull { it.value }?.index
             Log.d("ModelPrediction", "Predicted class: $predictedClass")
+            if (outputArray.isNotEmpty()) {
+                Log.d("OutputCheck", "Sample Output Values: ${outputArray[0].take(10)}")
+            }
+            val outputArray1D = outputArray.flatMap { it.asIterable() }.toFloatArray()
+            // Log the size of the 1D output array
+            Log.d("OutputArray1D", "Flattened output array size: ${outputArray1D.size}")
+
+// Log a subset of the values to verify contents (first 100 values or less)
+            val logValues = outputArray1D.take(100).joinToString(", ")
+            Log.d("OutputArray1DValues", "First 100 values: [$logValues]")
+            // After running inference
+            saveProcessedOutput(outputArray1D, outputShape, "processed_output.jpg")
+
         } catch (e: Exception) {
             Log.e("ModelError", "Error during inference: ${e.message}")
         }
     }
+
+    // Assuming you have a preprocessBitmapToModelInput function that converts the Bitmap
 
     private fun preprocessBitmapToModelInput(bitmap: Bitmap): FloatArray {
         val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 2304, 1728, true)
@@ -639,27 +661,38 @@ class CameraFragment : Fragment() {
     }
 
 
-    private fun prepareInputArray(bitmap: Bitmap, targetWidth: Int, targetHeight: Int): FloatArray {
-        // Resize the bitmap to match the model input dimensions
-        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, targetWidth, targetHeight, true)
+    fun saveProcessedOutput(outputArray: FloatArray, outputShape: IntArray, fileName: String) {
+        val width = outputShape[3]
+        val height = outputShape[2]
+        val channels = outputShape[1]
 
-        // Extract pixel data
-        val pixels = IntArray(targetWidth * targetHeight)
-        resizedBitmap.getPixels(pixels, 0, targetWidth, 0, 0, targetWidth, targetHeight)
+        if (channels == 3) { // Assuming RGB output
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val pixels = IntArray(width * height)
 
-        // Convert pixels to normalized FloatArray
-        val inputArray = FloatArray(1 * 3 * targetHeight * targetWidth)
-        var index = 0
-        for (pixel in pixels) {
-            val r = (pixel shr 16 and 0xFF) / 255.0f // Red channel
-            val g = (pixel shr 8 and 0xFF) / 255.0f  // Green channel
-            val b = (pixel and 0xFF) / 255.0f        // Blue channel
-            inputArray[index++] = r
-            inputArray[index++] = g
-            inputArray[index++] = b
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    val r = (outputArray[(0 * height * width) + (y * width) + x] * 255).toInt().coerceIn(0, 255)
+                    val g = (outputArray[(1 * height * width) + (y * width) + x] * 255).toInt().coerceIn(0, 255)
+                    val b = (outputArray[(2 * height * width) + (y * width) + x] * 255).toInt().coerceIn(0, 255)
+                    pixels[y * width + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                }
+            }
+
+            bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+
+            // Save the bitmap to a file
+            val file = File(requireContext().filesDir, fileName)
+            FileOutputStream(file).use { fos ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, fos)
+            }
+
+            Log.d("ProcessedOutput", "Processed image saved: ${file.absolutePath}")
+        } else {
+            Log.e("ProcessedOutput", "Unsupported output channels: $channels")
         }
-        return inputArray
     }
+
 
 
 
