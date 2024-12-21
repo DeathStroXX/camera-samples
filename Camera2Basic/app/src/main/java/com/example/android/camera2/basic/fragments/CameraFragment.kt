@@ -228,8 +228,8 @@ class CameraFragment : Fragment() {
     private fun initializeCamera() = lifecycleScope.launch(Dispatchers.Main) {
 
         //Loading the model
-       interpreter = ModelUtils.createInterpreter(requireContext(), "model.tflite")
-        Log.d("Model", "Model loaded successfully.")
+//       interpreter = ModelUtils.createInterpreter(requireContext(), "model.tflite")
+//        Log.d("Model", "Model loaded successfully.")
 
         // Open the selected camera
         camera = openCamera(cameraManager, args.cameraId, cameraHandler)
@@ -243,7 +243,7 @@ class CameraFragment : Fragment() {
 
 
         // RAW ImageReader
-            //rawSize = 4000x3000
+            //ra
         val rawSizes = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
             ?.getOutputSizes(ImageFormat.RAW_SENSOR)
 
@@ -604,7 +604,12 @@ class CameraFragment : Fragment() {
         try {
             // Convert the Bitmap to a FloatArray for inference
             val inputArray = preprocessBitmapToModelInput(bitmap)
-            Log.d("ModelInput", "Input array size: ${inputArray.count()}")
+
+//            saveInputArrayAsImage(inputArray, 2304, 1728)
+            Log.d("ModelInput", "Input array size: ${inputArray.size}")
+            // Log the values in a formatted string
+//            val valuesString = inputArray.joinToString(", ") { it.toString() }
+//            Log.d("InputArrayValues", "Values: $valuesString")
 
             // Get the output tensor and its shape
             val outputTensor = interpreter.getOutputTensor(0)
@@ -614,7 +619,7 @@ class CameraFragment : Fragment() {
             val outputSize = outputShape.reduce { acc, dim -> acc * dim }
 
             // Create an appropriately sized output array
-            val outputArray = Array(outputShape[0]) { FloatArray(outputSize) }
+            val outputArray = Array(outputShape[0]) { ByteArray(outputSize) }
             Log.d("OutputArraySize", "Dimensions: ${outputArray.size} x ${outputArray[0].size}")
             // Run inference
             interpreter.run(arrayOf(inputArray), outputArray)
@@ -626,15 +631,17 @@ class CameraFragment : Fragment() {
             if (outputArray.isNotEmpty()) {
                 Log.d("OutputCheck", "Sample Output Values: ${outputArray[0].take(10)}")
             }
-            val outputArray1D = outputArray.flatMap { it.asIterable() }.toFloatArray()
+            // Making changes for saving image
+            val outputArray1D = outputArray.flatMap { it.asIterable() }.toByteArray()
+//
             // Log the size of the 1D output array
             Log.d("OutputArray1D", "Flattened output array size: ${outputArray1D.size}")
 
-// Log a subset of the values to verify contents (first 100 values or less)
+            // Log a subset of the values to verify contents (first 100 values or less)
             val logValues = outputArray1D.take(100).joinToString(", ")
             Log.d("OutputArray1DValues", "First 100 values: [$logValues]")
             // After running inference
-            saveProcessedOutput(outputArray1D, outputShape, "processed_output.jpg")
+            saveProcessedOutput(outputArray1D, outputShape)
 
         } catch (e: Exception) {
             Log.e("ModelError", "Error during inference: ${e.message}")
@@ -644,24 +651,49 @@ class CameraFragment : Fragment() {
     // Assuming you have a preprocessBitmapToModelInput function that converts the Bitmap
 
     private fun preprocessBitmapToModelInput(bitmap: Bitmap): FloatArray {
+
+        // Resize the bitmap to the model's expected input size
         val resizedBitmap = Bitmap.createScaledBitmap(bitmap, 2304, 1728, true)
+        Log.d("Preprocess", "Bitmap resized to: ${resizedBitmap.width}x${resizedBitmap.height}")
+
+        // Initialize the FloatArray for the RGB input
         val floatArray = FloatArray(2304 * 1728 * 3) // For RGB input
         var index = 0
+
+        // Debugging variables to track pixel values
+        var minPixelValue = Float.MAX_VALUE
+        var maxPixelValue = Float.MIN_VALUE
+        Log.d("Model Input--------", "Total values in float array: ${minPixelValue}, ${maxPixelValue}")
 
         for (y in 0 until resizedBitmap.height) {
             for (x in 0 until resizedBitmap.width) {
                 val pixel = resizedBitmap.getPixel(x, y)
-                floatArray[index++] = (pixel shr 16 and 0xFF) / 255.0f // Red
-                floatArray[index++] = (pixel shr 8 and 0xFF) / 255.0f  // Green
-                floatArray[index++] = (pixel and 0xFF) / 255.0f        // Blue
+                val r = (pixel shr 16 and 0xFF) / 255.0f // Red
+                val g = (pixel shr 8 and 0xFF) / 255.0f  // Green
+                val b = (pixel and 0xFF) / 255.0f        // Blue
+
+                // Store the normalized RGB values in the float array
+                floatArray[index++] = r
+                floatArray[index++] = g
+                floatArray[index++] = b
+
+                // Update min and max for debugging
+                minPixelValue = minOf(minPixelValue, r, g, b)
+                maxPixelValue = maxOf(maxPixelValue, r, g, b)
             }
         }
+
+        // Log statistics about the processed input
+        Log.d("Preprocess", "Preprocessed float array created.")
+        Log.d("Preprocess", "Total values: ${floatArray.size}, Min: $minPixelValue, Max: $maxPixelValue")
+
+        // Log a sample of the normalized pixel values
+        Log.d("PreprocessSample", "Sample values: ${floatArray.take(10)}")
 
         return floatArray
     }
 
-
-    fun saveProcessedOutput(outputArray: FloatArray, outputShape: IntArray, fileName: String) {
+    fun saveProcessedOutput(outputArray: ByteArray, outputShape: IntArray) {
         val width = outputShape[3]
         val height = outputShape[2]
         val channels = outputShape[1]
@@ -682,6 +714,8 @@ class CameraFragment : Fragment() {
             bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
 
             // Save the bitmap to a file
+            val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
+            val fileName = "IMG_${sdf.format(Date())}_ProcessedOutput.jpg"
             val file = File(requireContext().filesDir, fileName)
             FileOutputStream(file).use { fos ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 100, fos)
@@ -692,6 +726,39 @@ class CameraFragment : Fragment() {
             Log.e("ProcessedOutput", "Unsupported output channels: $channels")
         }
     }
+    private fun saveInputArrayAsImage(inputArray: FloatArray, width: Int, height: Int) {
+        try {
+            // Create a Bitmap to store the pixel data
+
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            var index = 0
+
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    // Extract RGB values from the FloatArray
+                    val r = (inputArray[index++] * 255).toInt().coerceIn(0, 255)
+                    val g = (inputArray[index++] * 255).toInt().coerceIn(0, 255)
+                    val b = (inputArray[index++] * 255).toInt().coerceIn(0, 255)
+
+                    // Reconstruct the pixel color
+                    val color = (255 shl 24) or (r shl 16) or (g shl 8) or b
+                    bitmap.setPixel(x, y, color)
+                }
+            }
+
+            // Save the reconstructed Bitmap to a file
+            val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
+            val outputFile = File(requireContext().filesDir, "IMG_${sdf.format(Date())}_Input.jpg")
+            FileOutputStream(outputFile).use { outputStream ->
+                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
+            }
+
+            Log.d("SaveImage", "Input array saved as image: ${outputFile.absolutePath}")
+        } catch (e: Exception) {
+            Log.e("SaveImageError", "Failed to save input array as image: ${e.message}")
+        }
+    }
+
 
 
 
