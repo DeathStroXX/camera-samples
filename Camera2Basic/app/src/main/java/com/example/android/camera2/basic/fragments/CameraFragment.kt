@@ -663,7 +663,7 @@ class CameraFragment : Fragment() {
         // Debugging variables to track pixel values
         var minPixelValue = Float.MAX_VALUE
         var maxPixelValue = Float.MIN_VALUE
-        Log.d("Model Input--------", "Total values in float array: ${minPixelValue}, ${maxPixelValue}")
+        Log.d("Model Input--------", "Minumum Pixel value: ${minPixelValue}; Maximum Pixel value: ${maxPixelValue}")
 
         for (y in 0 until resizedBitmap.height) {
             for (x in 0 until resizedBitmap.width) {
@@ -693,39 +693,98 @@ class CameraFragment : Fragment() {
         return floatArray
     }
 
-    fun saveProcessedOutput(outputArray: ByteArray, outputShape: IntArray) {
+    private fun saveProcessedOutput(outputArray: ByteArray, outputShape: IntArray) {
         val width = outputShape[3]
         val height = outputShape[2]
         val channels = outputShape[1]
+
+        Log.d("ModelProcessOutput ----", "Output shape: Channels=$channels, Height=$height, Width=$width")
 
         if (channels == 3) { // Assuming RGB output
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             val pixels = IntArray(width * height)
 
+            var minValue = 255
+            var maxValue = 0
+
             for (y in 0 until height) {
                 for (x in 0 until width) {
-                    val r = (outputArray[(0 * height * width) + (y * width) + x] * 255).toInt().coerceIn(0, 255)
-                    val g = (outputArray[(1 * height * width) + (y * width) + x] * 255).toInt().coerceIn(0, 255)
-                    val b = (outputArray[(2 * height * width) + (y * width) + x] * 255).toInt().coerceIn(0, 255)
+                    val rIndex = (0 * height * width) + (y * width) + x
+                    val gIndex = (1 * height * width) + (y * width) + x
+                    val bIndex = (2 * height * width) + (y * width) + x
+
+                    val r = (outputArray.getOrElse(rIndex) { 0 }.toInt() and 0xFF).coerceIn(0, 255)
+                    val g = (outputArray.getOrElse(gIndex) { 0 }.toInt() and 0xFF).coerceIn(0, 255)
+                    val b = (outputArray.getOrElse(bIndex) { 0 }.toInt() and 0xFF).coerceIn(0, 255)
+
+                    // Update min and max values
+                    minValue = minOf(minValue, r, g, b)
+                    maxValue = maxOf(maxValue, r, g, b)
+
                     pixels[y * width + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
                 }
             }
 
             bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
 
-            // Save the bitmap to a file
-            val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
-            val fileName = "IMG_${sdf.format(Date())}_ProcessedOutput.jpg"
-            val file = File(requireContext().filesDir, fileName)
-            FileOutputStream(file).use { fos ->
+            // Log min and max pixel values
+            Log.d("ModelProcessOutput ----", "Pixel value range in bitmap: Min=$minValue, Max=$maxValue")
+
+            // Log a sample of pixel values
+            val samplePixels = pixels.take(10)
+            Log.d("ModelProcessOutput ----", "Sample pixel values: ${samplePixels.joinToString(", ")}")
+
+            try {
+                val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
+                val fileName = "IMG_${sdf.format(Date())}_ProcessedOutput.jpg"
+                val file = File(requireContext().filesDir, fileName)
+                FileOutputStream(file).use { fos ->
                 bitmap.compress(Bitmap.CompressFormat.JPEG, 100, fos)
             }
-
-            Log.d("ProcessedOutput", "Processed image saved: ${file.absolutePath}")
+                 Log.d("ModelProcessOutput ----", "Processed image saved: ${file.absolutePath}")
+            } catch (e: Exception) {
+                Log.e("ModelProcessOutput ----", "Failed to save processed image: ${e.message}", e)
+            }
         } else {
-            Log.e("ProcessedOutput", "Unsupported output channels: $channels")
+            Log.e("ModelProcessOutput ----", "Unsupported output channels: $channels. Only RGB (3 channels) is supported.")
         }
     }
+
+
+    //
+//    fun saveProcessedOutput(outputArray: ByteArray, outputShape: IntArray) {
+//        val width = outputShape[3]
+//        val height = outputShape[2]
+//        val channels = outputShape[1]
+//
+//        if (channels == 3) { // Assuming RGB output
+//            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+//            val pixels = IntArray(width * height)
+//
+//            for (y in 0 until height) {
+//                for (x in 0 until width) {
+//                    val r = (outputArray[(0 * height * width) + (y * width) + x] * 255).toInt().coerceIn(0, 255)
+//                    val g = (outputArray[(1 * height * width) + (y * width) + x] * 255).toInt().coerceIn(0, 255)
+//                    val b = (outputArray[(2 * height * width) + (y * width) + x] * 255).toInt().coerceIn(0, 255)
+//                    pixels[y * width + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+//                }
+//            }
+//
+//            bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+//
+//            // Save the bitmap to a file
+//            val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
+//            val fileName = "IMG_${sdf.format(Date())}_ProcessedOutput.jpg"
+//            val file = File(requireContext().filesDir, fileName)
+//            FileOutputStream(file).use { fos ->
+//                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, fos)
+//            }
+//
+//            Log.d("ProcessedOutput", "Processed image saved: ${file.absolutePath}")
+//        } else {
+//            Log.e("ProcessedOutput", "Unsupported output channels: $channels")
+//        }
+//    }
     private fun saveInputArrayAsImage(inputArray: FloatArray, width: Int, height: Int) {
         try {
             // Create a Bitmap to store the pixel data
