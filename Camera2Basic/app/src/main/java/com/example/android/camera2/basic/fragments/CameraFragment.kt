@@ -366,7 +366,6 @@ class CameraFragment : Fragment() {
         // Create a capture session using the predefined targets; this also involves defining the
         // session state callback to be notified of when the session is ready
         device.createCaptureSession(targets, object : CameraCaptureSession.StateCallback() {
-
             override fun onConfigured(session: CameraCaptureSession) = cont.resume(session)
 
             override fun onConfigureFailed(session: CameraCaptureSession) {
@@ -613,13 +612,13 @@ class CameraFragment : Fragment() {
             val inputArray = preprocessBitmapToModelInput(bitmap)
 //            Log.d("inputArray", ${inputArray.sizes})
 //            saveInputArrayAsImage(inputArray, 2304, 1728)
-            val saveArray = SavingPixelArray()
+//            val saveArray = SavingPixelArray()
             Log.d("ModelInput", "Input array size: ${inputArray.size}")
             // Log the values in a formatted string
 //            val valuesString = inputArray.joinToString(", ") { it.toString() }
 //            Log.d("InputArrayValues", "Values: $valuesString")
-            saveArray.saveFloatArrayAsNumpyFile(inputArray, requireContext().filesDir, "inputArray.npy")
-            Log.d("ModelInput", "Input array saved successfully as numpy.")
+//            saveArray.saveFloatArrayAsNumpyFile(inputArray, requireContext().filesDir, "inputArray.npy")
+//            Log.d("ModelInput", "Input array saved successfully as numpy.")
 
             // Get the output tensor and its shape
             val outputTensor = interpreter.getOutputTensor(0)
@@ -717,66 +716,43 @@ class CameraFragment : Fragment() {
 
         return floatArray
     }
-    private fun saveProcessedOutput(outputArrayValue: UByteArray, outputShape: IntArray) {
-        // Determine dimensions from outputShape
-        val channels = if (outputShape.size == 3) outputShape[0] else outputShape[1]
-        val height = if (outputShape.size == 3) outputShape[1] else outputShape[2]
-        val width = if (outputShape.size == 3) outputShape[2] else outputShape[3]
 
-        Log.d("ModelProcessOutput ----", "Output shape: Channels=$channels, Height=$height, Width=$width")
+    private fun saveProcessedOutput(outputArrayValue: UByteArray, outputShape: IntArray) {
+        // Assuming outputShape is [Batch, Channels, Height, Width]
+        val batchSize = outputShape[0] // Should be 1
+        val channels = outputShape[1] // RGB = 3
+        val height = outputShape[2]   // 1728
+        val width = outputShape[3]    // 2304
+
+        Log.d("ModelProcessOutput ----", "Output shape: Batch=$batchSize, Channels=$channels, Height=$height, Width=$width")
 
         // Ensure the output has 3 channels (RGB)
-        if (channels != 3) {
-            Log.e("ModelProcessOutput ----", "Unsupported output channels: $channels. Only RGB (3 channels) is supported.")
-            return
-        }
-
-        // Create the bitmap and the pixel array
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        val pixels = IntArray(width * height)
-
-        // Initialize min and max values for debugging
+        //        // Initialize min and max values for debugging
         var minValue = 255
         var maxValue = 0
-
-        // Process each pixel
-        for (y in 0 until height) {
-            for (x in 0 until width) {
-                // Compute indices for R, G, B values
-                val rIndex = (0 * height * width) + (y * width) + x
-                val gIndex = (1 * height * width) + (y * width) + x
-                val bIndex = (2 * height * width) + (y * width) + x
-
-                // Ensure indices are within bounds
-                if (rIndex >= outputArrayValue.size || gIndex >= outputArrayValue.size || bIndex >= outputArrayValue.size) {
-                    Log.e(
-                        "ModelProcessOutput ----",
-                        "Error: Index out of bounds! rIndex=$rIndex, gIndex=$gIndex, bIndex=$bIndex, outputArray.size=${outputArrayValue.size}"
-                    )
-                    return
-                }
-
-                // Treat bytes as unsigned
-                val r = outputArrayValue[rIndex].toInt() and 0xFF
-                val g = outputArrayValue[gIndex].toInt() and 0xFF
-                val b = outputArrayValue[bIndex].toInt() and 0xFF
-
-                // Update min and max values
-                minValue = minOf(minValue, r, g, b)
-                maxValue = maxOf(maxValue, r, g, b)
-
-                // Combine into ARGB format (alpha = 255)
-                pixels[y * width + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-            }
+        // Convert UByteArray to FloatArray
+        val floatArray = FloatArray(outputArrayValue.size) { i ->
+            outputArrayValue[i].toFloat() / 255.0f // Assuming normalized between 0 and 1
         }
 
-        // Set pixels to the bitmap
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        var index = 0
 
-        // Log min and max pixel values for debugging
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                // Extract RGB values from the FloatArray
+                val r = (floatArray[index++] * 255).toInt().coerceIn(0, 255)
+                val g = (floatArray[index++] * 255).toInt().coerceIn(0, 255)
+                val b = (floatArray[index++] * 255).toInt().coerceIn(0, 255)
+
+                // Reconstruct the pixel color
+                val color = (255 shl 24) or (r shl 16) or (g shl 8) or b
+                bitmap.setPixel(x, y, color)
+            }
+        }
         Log.d("ModelProcessOutput ----", "Pixel value range in bitmap: Min=$minValue, Max=$maxValue")
 
-        // The file-saving logic remains unchanged
+        // Save the bitmap as a file
         try {
             val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
             val fileName = "IMG_${sdf.format(Date())}_ProcessedOutput.jpg"
@@ -789,6 +765,142 @@ class CameraFragment : Fragment() {
             Log.e("ModelProcessOutput ----", "Failed to save processed image: ${e.message}", e)
         }
     }
+
+//    private fun saveProcessedOutput(outputArrayValue: UByteArray, outputShape: IntArray) {
+//        // Assuming outputShape is [Batch, Channels, Height, Width]
+//        val batchSize = outputShape[0] // Should be 1
+//        val channels = outputShape[1] // RGB = 3
+//        val height = outputShape[2]   // 1728
+//        val width = outputShape[3]    // 2304
+//
+//        Log.d("ModelProcessOutput ----", "Output shape: Batch=$batchSize, Channels=$channels, Height=$height, Width=$width")
+//
+//        // Ensure the output has 3 channels (RGB)
+//        if (channels != 3) {
+//            Log.e("ModelProcessOutput ----", "Unsupported output channels: $channels. Only RGB (3 channels) is supported.")
+//            return
+//        }
+//
+//        // Create the bitmap and the pixel array
+//        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+//        val pixels = IntArray(width * height)
+//
+//        // Initialize min and max values for debugging
+//        var minValue = 255
+//        var maxValue = 0
+//
+//        // Process each pixel
+//        for (y in 0 until height) {
+//            for (x in 0 until width) {
+//                val rIndex = (0 * height * width) + (y * width) + x
+//                val gIndex = (1 * height * width) + (y * width) + x
+//                val bIndex = (2 * height * width) + (y * width) + x
+//
+//                if (rIndex >= outputArrayValue.size || gIndex >= outputArrayValue.size || bIndex >= outputArrayValue.size) {
+//                    Log.e("ModelProcessOutput ----", "Index out of bounds: rIndex=$rIndex, gIndex=$gIndex, bIndex=$bIndex")
+//                    return
+//                }
+//
+//                val r = outputArrayValue[rIndex].toInt() and 0xFF
+//                val g = outputArrayValue[gIndex].toInt() and 0xFF
+//                val b = outputArrayValue[bIndex].toInt() and 0xFF
+//
+//                minValue = minOf(minValue, r, g, b)
+//                maxValue = maxOf(maxValue, r, g, b)
+//
+//                pixels[y * width + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+//            }
+//        }
+//
+//        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+//        Log.d("ModelProcessOutput ----", "Pixel value range in bitmap: Min=$minValue, Max=$maxValue")
+//
+//        // Save the bitmap as a file
+//        try {
+//            val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
+//            val fileName = "IMG_${sdf.format(Date())}_ProcessedOutput.jpg"
+//            val file = File(requireContext().filesDir, fileName)
+//            FileOutputStream(file).use { fos ->
+//                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, fos)
+//            }
+//            Log.d("ModelProcessOutput ----", "Processed image saved: ${file.absolutePath}")
+//        } catch (e: Exception) {
+//            Log.e("ModelProcessOutput ----", "Failed to save processed image: ${e.message}", e)
+//        }
+//    }
+
+//    private fun saveProcessedOutput(outputArrayValue: UByteArray, outputShape: IntArray) {
+//        // Determine dimensions from outputShape
+//        val channels = if (outputShape.size == 3) outputShape[0] else outputShape[1]
+//        val height = if (outputShape.size == 3) outputShape[1] else outputShape[2]
+//        val width = if (outputShape.size == 3) outputShape[2] else outputShape[3]
+//
+//        Log.d("ModelProcessOutput ----", "Output shape: Channels=$channels, Height=$height, Width=$width")
+//
+//        // Ensure the output has 3 channels (RGB)
+//        if (channels != 3) {
+//            Log.e("ModelProcessOutput ----", "Unsupported output channels: $channels. Only RGB (3 channels) is supported.")
+//            return
+//        }
+//
+//        // Create the bitmap and the pixel array
+//        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+//        val pixels = IntArray(width * height)
+//
+//        // Initialize min and max values for debugging
+//        var minValue = 255
+//        var maxValue = 0
+//
+//        // Process each pixel
+//        for (y in 0 until height) {
+//            for (x in 0 until width) {
+//                // Compute indices for R, G, B values
+//                val rIndex = (0 * height * width) + (y * width) + x
+//                val gIndex = (1 * height * width) + (y * width) + x
+//                val bIndex = (2 * height * width) + (y * width) + x
+//
+//                // Ensure indices are within bounds
+//                if (rIndex >= outputArrayValue.size || gIndex >= outputArrayValue.size || bIndex >= outputArrayValue.size) {
+//                    Log.e(
+//                        "ModelProcessOutput ----",
+//                        "Error: Index out of bounds! rIndex=$rIndex, gIndex=$gIndex, bIndex=$bIndex, outputArray.size=${outputArrayValue.size}"
+//                    )
+//                    return
+//                }
+//
+//                // Treat bytes as unsigned
+//                val r = outputArrayValue[rIndex].toInt() and 0xFF
+//                val g = outputArrayValue[gIndex].toInt() and 0xFF
+//                val b = outputArrayValue[bIndex].toInt() and 0xFF
+//
+//                // Update min and max values
+//                minValue = minOf(minValue, r, g, b)
+//                maxValue = maxOf(maxValue, r, g, b)
+//
+//                // Combine into ARGB format (alpha = 255)
+//                pixels[y * width + x] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+//            }
+//        }
+//
+//        // Set pixels to the bitmap
+//        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+//
+//        // Log min and max pixel values for debugging
+//        Log.d("ModelProcessOutput ----", "Pixel value range in bitmap: Min=$minValue, Max=$maxValue")
+//
+//        // The file-saving logic remains unchanged
+//        try {
+//            val sdf = SimpleDateFormat("yyyy_MM_dd_HH_mm_ss_SSS", Locale.US)
+//            val fileName = "IMG_${sdf.format(Date())}_ProcessedOutput.jpg"
+//            val file = File(requireContext().filesDir, fileName)
+//            FileOutputStream(file).use { fos ->
+//                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, fos)
+//            }
+//            Log.d("ModelProcessOutput ----", "Processed image saved: ${file.absolutePath}")
+//        } catch (e: Exception) {
+//            Log.e("ModelProcessOutput ----", "Failed to save processed image: ${e.message}", e)
+//        }
+//    }
 
 
 //    private fun saveProcessedOutput(outputArrayValue: UByteArray, outputShape: IntArray) {
@@ -987,15 +1099,6 @@ class CameraFragment : Fragment() {
             Log.e("SaveImageError", "Failed to save input array as image: ${e.message}")
         }
     }
-
-
-
-
-
-
-
-
-
 
     override fun onStop() {
         super.onStop()
